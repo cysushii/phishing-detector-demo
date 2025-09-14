@@ -156,7 +156,7 @@ async def parse_email(raw_email: str):
 # Streamlit UI
 # ----------------------------
 st.set_page_config(page_title="Phishing Detector Demo", layout="centered")
-st.title("🔒 Phishing Detector — Demo (Live + Test URLs)")
+st.title("🔒 AI Phishing Detector — Demo (Live + Test URLs) MADE BY SUSHANTH . M AND VISHVATH .M :)")
 
 st.markdown(
     "This demo scans mock emails and test URLs. Suspicious links trigger an alert and a sound."
