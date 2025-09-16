@@ -111,13 +111,13 @@ Please download the update from: http://company-secure.com/update
 # Mock Employees (seeded histories)
 # ---------------------------
 EMPLOYEES = [
-    {"id": "E101", "name": "Alice",   "email": "alice@company.com",   "history": []},
-    {"id": "E102", "name": "Bob",     "email": "bob@company.com",     "history": []},
-    {"id": "E103", "name": "Charlie", "email": "charlie@company.com", "history": []},
-    {"id": "E104", "name": "David",   "email": "david@company.com",   "history": []},
-    {"id": "E105", "name": "Eva",     "email": "eva@company.com",     "history": []},
-    {"id": "E106", "name": "Frank",   "email": "frank@company.com",   "history": []},
-    {"id": "E107", "name": "Grace",   "email": "grace@company.com",   "history": []},
+    {"id": "E101", "name": "Sushanth .M",   "email": "Sushi129@company.com",   "history": []},
+    {"id": "E102", "name": "Vishvath.M",     "email": "vishymushy@company.com",     "history": []},
+    {"id": "E103", "name": "Trishith Arjun", "email": "arjunararcher@company.com", "history": []},
+    {"id": "E104", "name": "Clement",   "email": "clementchr@company.com",   "history": []},
+    {"id": "E105", "name": "Sanjeev",     "email": "sanju@company.com",     "history": []},
+    {"id": "E106", "name": "Merin Alan",   "email": "alanlion@company.com",   "history": []},
+    {"id": "E107", "name": "jai surya",   "email": "suryasun@company.com",   "history": []},
 ]
 
 # ---------------------------
