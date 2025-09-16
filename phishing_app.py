@@ -1,37 +1,36 @@
 # phishing_app.py
-# Phishing Detector PoC — more employees + simplified per-employee summary
-# - auto-generates 30 mock employees (E001..E030)
-# - simulated system checks, per-employee URL sync/check
-# - per-employee summary table: total visits, phish visits, safe visits
-# - alerts + sound
-#
-# Run: streamlit run phishing_app.py
-
-import re, asyncio, random, time, io, math, wave, struct
-from email import message_from_string
+import re
+import asyncio
+import io
+import math
+import wave
+import struct
+import random
 import streamlit as st
+from email import message_from_string
 
 # ----------------------------
-# Utilities (URL extraction + simple rules)
+# Utilities
 # ----------------------------
 def extract_urls(text: str):
+    """Return list of URLs found in text (simple regex)."""
     if not text:
         return []
     return re.findall(r"(https?://[^\s]+)", text)
 
-def is_suspicious_keyword(url: str):
+def check_suspicious_keyword(url: str):
+    """Simple keyword-based suspicion check."""
     suspicious_patterns = ["login", "verify", "bank", "update", "secure", "account", "reset", "re-activate"]
     return any(p in url.lower() for p in suspicious_patterns)
 
-# Sound helper
 def play_alert_sound():
+    """Play a short beep. Uses winsound on Windows, otherwise stream a generated WAV."""
     try:
         import winsound
-        winsound.Beep(1000, 300)
+        winsound.Beep(1000, 400)
     except Exception:
-        # create small sine WAV and play via st.audio
-        sample_rate = 22050
-        duration_s = 0.22
+        sample_rate = 44100
+        duration_s = 0.35
         frequency = 880.0
         n_samples = int(sample_rate * duration_s)
         buf = io.BytesIO()
@@ -41,8 +40,10 @@ def play_alert_sound():
             wf.setframerate(sample_rate)
             for i in range(n_samples):
                 t = i / sample_rate
-                value = int((0.25 * 32767) * math.sin(2 * math.pi * frequency * t))
-                wf.writeframes(struct.pack('<h', value))
+                amplitude = 0.3 * 32767
+                value = int(amplitude * math.sin(2 * math.pi * frequency * t))
+                data = struct.pack('<h', value)
+                wf.writeframesraw(data)
         buf.seek(0)
         try:
             st.audio(buf.read(), format="audio/wav")
@@ -50,57 +51,9 @@ def play_alert_sound():
             pass
 
 # ----------------------------
-# Mock employees (auto-generate many entries)
-# ----------------------------
-NUM_EMPLOYEES = 30
-# ----------------------------
-# Mock employee directory with seeded activity
-# ----------------------------
-EMPLOYEES = [
-    {"id": 101, "name": "Alice",   "email": "alice@company.com",   "history": []},
-    {"id": 102, "name": "Bob",     "email": "bob@company.com",     "history": []},
-    {"id": 103, "name": "Charlie", "email": "charlie@company.com", "history": []},
-    {"id": 104, "name": "Diana",   "email": "diana@company.com",   "history": []},
-    {"id": 105, "name": "Eve",     "email": "eve@company.com",     "history": []},
-    {"id": 106, "name": "Frank",   "email": "frank@company.com",   "history": []},
-    {"id": 107, "name": "Grace",   "email": "grace@company.com",   "history": []},
-    {"id": 108, "name": "Henry",   "email": "henry@company.com",   "history": []},
-]
-
-def seed_employee_history():
-    """Pre-fill some visits so summary table looks alive."""
-    sample_visits = [
-        {"url": "https://www.google.com", "status": "SAFE"},
-        {"url": "http://secure-bank.verify.me", "status": "PHISH"},
-        {"url": "https://www.github.com", "status": "SAFE"},
-        {"url": "http://apple.id-login-reset.com", "status": "PHISH"},
-        {"url": "MALWARE", "status": "MALWARE"},
-    ]
-    import random
-    for emp in EMPLOYEES:
-        # Give each employee 3–6 random visits
-        emp["history"] = random.sample(sample_visits, k=random.randint(3, 6))
-
-# Call this once at startup
-seed_employee_history()
-
-for i in range(1, NUM_EMPLOYEES + 1):
-    eid = f"E{i:03d}"
-    name = f"Employee {i}"
-    email = f"employee{i}@company.local"
-    EMPLOYEES[eid] = {"name": name, "email": email}
-
-# runtime state: events per employee
-STATE = {
-    "events": {eid: [] for eid in EMPLOYEES.keys()},  # each event: dict
-    "visit_counts": {eid: [] for eid in EMPLOYEES.keys()},  # counters per interval
-}
-
-# org trusted domains (whitelist)
-ORG_TRUSTED_DOMAINS = {"company.local", "intranet.company.local"}
-
 # Test URL lists
-PHISHING_URLS = [
+# ----------------------------
+phishing_test_urls = [
     "http://example.com/login-update",
     "http://secure-bank.verify.me",
     "https://paypal.com.verify-account.cn",
@@ -120,7 +73,7 @@ PHISHING_URLS = [
     "http://yahoo.recovery-login.ml",
 ]
 
-SAFE_URLS = [
+safe_test_urls = [
     "https://www.google.com",
     "https://www.wikipedia.org",
     "https://www.github.com",
@@ -138,7 +91,9 @@ SAFE_URLS = [
     "https://www.dropbox.com",
 ]
 
-# Mock mailbox (keeps earlier behavior)
+# ----------------------------
+# Mock mailbox
+# ----------------------------
 MOCK_MAILBOX = [
     """Subject: Meeting tomorrow
 From: teamlead@company.com
@@ -161,9 +116,9 @@ To: you@example.com
 
 Hi,
 Please review:
-- {SAFE_URLS[0]}
-- {PHISHING_URLS[0]}
-- {SAFE_URLS[2]}
+- {safe_test_urls[0]}
+- {phishing_test_urls[0]}
+- {safe_test_urls[2]}
 Thanks.
 """,
     """Subject: Your account has been locked
@@ -176,185 +131,152 @@ https://paypal.com.verify-account.cn/reset
 ]
 
 # ----------------------------
-# Core helpers
+# Employees with seeded history
 # ----------------------------
-def domain_of(url: str):
-    try:
-        return re.sub(r"^https?://", "", url).split("/")[0].lower()
-    except Exception:
-        return ""
+EMPLOYEES = [
+    {"id": 101, "name": "Alice",   "email": "alice@company.com",   "history": []},
+    {"id": 102, "name": "Bob",     "email": "bob@company.com",     "history": []},
+    {"id": 103, "name": "Charlie", "email": "charlie@company.com", "history": []},
+    {"id": 104, "name": "Diana",   "email": "diana@company.com",   "history": []},
+    {"id": 105, "name": "Eve",     "email": "eve@company.com",     "history": []},
+    {"id": 106, "name": "Frank",   "email": "frank@company.com",   "history": []},
+    {"id": 107, "name": "Grace",   "email": "grace@company.com",   "history": []},
+    {"id": 108, "name": "Henry",   "email": "henry@company.com",   "history": []},
+]
 
-def is_trusted_domain(url: str):
-    d = domain_of(url)
-    return any(d.endswith(td) for td in ORG_TRUSTED_DOMAINS)
+def seed_employee_history():
+    """Pre-fill some visits so summary table looks alive."""
+    sample_visits = [
+        {"url": "https://www.google.com", "status": "SAFE"},
+        {"url": "http://secure-bank.verify.me", "status": "PHISH"},
+        {"url": "https://www.github.com", "status": "SAFE"},
+        {"url": "http://apple.id-login-reset.com", "status": "PHISH"},
+        {"url": "MALWARE", "status": "MALWARE"},
+    ]
+    for emp in EMPLOYEES:
+        emp["history"] = random.sample(sample_visits, k=random.randint(3, 6))
 
-def evaluate_url_for_employee(eid: str, url: str):
-    """Return (is_phish, evidence_list) and update event log (no scoring)."""
-    evidence = []
-    phish = False
-    if is_trusted_domain(url):
-        evidence.append("trusted domain (org policy)")
-    if is_suspicious_keyword(url):
-        evidence.append("suspicious keyword in URL")
-        phish = True
-    d = domain_of(url)
-    if re.search(r"[0-9]+", d) and any(x in d for x in ("amazon", "paypal", "bank", "login")):
-        evidence.append("possible lookalike domain/homoglyph")
-        phish = True
-    event = {"time": time.time(), "type": "url_visit", "url": url, "phish": phish, "evidence": evidence}
-    STATE["events"][eid].insert(0, event)
-    STATE["events"][eid] = STATE["events"][eid][:500]  # keep recent history
-    # update visit count for current interval
-    if not STATE["visit_counts"][eid]:
-        STATE["visit_counts"][eid].append(1)
-    else:
-        STATE["visit_counts"][eid][-1] += 1
-    return phish, evidence
+seed_employee_history()
 
 # ----------------------------
-# Simulated periodic system checks (no scoring)
-# ----------------------------
-async def simulated_system_checks(run_seconds=30, interval=5):
-    start = time.time()
-    while time.time() - start < run_seconds:
-        # start new interval counters
-        for eid in EMPLOYEES.keys():
-            STATE["visit_counts"][eid].append(0)
-            if len(STATE["visit_counts"][eid]) > 40:
-                STATE["visit_counts"][eid].pop(0)
-        # simulate activity
-        for eid in EMPLOYEES.keys():
-            visits = random.randint(0, 3)  # small activity per interval
-            for _ in range(visits):
-                url = random.choice(SAFE_URLS) if random.random() < 0.76 else random.choice(PHISHING_URLS)
-                phish, evidence = evaluate_url_for_employee(eid, url)
-                if phish:
-                    play_alert_sound()
-                await asyncio.sleep(0.02)
-            # small chance of malware event
-            if random.random() < 0.03:
-                ev = {"time": time.time(), "type": "malware", "desc": "Simulated malware-like behavior detected"}
-                STATE["events"][eid].insert(0, ev)
-        await asyncio.sleep(interval)
-
-# ----------------------------
-# Async email parsing (simple)
+# Async parsers
 # ----------------------------
 async def parse_email(raw_email: str):
     msg = message_from_string(raw_email)
     subject = msg.get("subject", "(no subject)")
     body = msg.get_payload() or ""
     urls = extract_urls(str(body))
-    flagged = [url for url in urls if is_suspicious_keyword(url)]
+    flagged = [url for url in urls if check_suspicious_keyword(url)]
     return subject, urls, flagged
-
-# ----------------------------
-# Summary helpers
-# ----------------------------
-def summarize_employee_events(eid: str):
-    evs = STATE["events"].get(eid, [])
-    total = sum(1 for e in evs if e.get("type") == "url_visit")
-    phish = sum(1 for e in evs if e.get("type") == "url_visit" and e.get("phish"))
-    safe = total - phish
-    malware = sum(1 for e in evs if e.get("type") == "malware")
-    return {"total_visits": total, "phish_visits": phish, "safe_visits": safe, "malware_events": malware}
 
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.set_page_config(page_title="Phishing PoC — Many Employees", layout="wide")
-st.title("Phishing Detector PoC — Many Employees (Simplified Summary)")
+st.set_page_config(page_title="Phishing Detector Demo", layout="centered")
+st.title("🔒 Phishing Detector — Demo (Employees + Live Checks)")
 
-col1, col2 = st.columns([1, 2])
+st.markdown(
+    "This demo scans mock emails, test URLs, and simulates employee activity. "
+    "Suspicious links trigger alerts + sound. Employees start with some pre-filled activity."
+)
 
-with col1:
-    st.header("Controls")
-    run_sim = st.button("▶ Start simulation (30s)")
-    st.write("Trusted org domains (comma-separated):")
-    td_input = st.text_input("Trusted domains", value=",".join(ORG_TRUSTED_DOMAINS))
-    if td_input.strip():
-        ORG_TRUSTED_DOMAINS.clear()
-        for d in [x.strip().lower() for x in td_input.split(",") if x.strip()]:
-            ORG_TRUSTED_DOMAINS.add(d)
-    st.markdown("---")
-    st.subheader("Sync URL for Employee")
-    sel_eid = st.selectbox("Employee", list(EMPLOYEES.keys()))
-    input_url = st.text_input("Paste URL to sync/check for selected employee")
-    if st.button("Check URL for Employee"):
-        if input_url.strip():
-            phish, evidence = evaluate_url_for_employee(sel_eid, input_url.strip())
-            if phish:
-                st.error(f"⚠ URL flagged for {sel_eid}: {', '.join(evidence) if evidence else ''}")
-                play_alert_sound()
-            else:
-                st.success(f"✅ URL logged as safe for {sel_eid}. Evidence: {', '.join(evidence) if evidence else 'none'}")
+run_emails = st.button("📩 Start Monitoring Mock Mailbox")
+scan_urls = st.button("🔎 Scan Test URL Lists")
+simulate_emp = st.button("▶ Start simulation (30s)")
 
-with col2:
-    st.header("Employee Events & Summary")
-    # summary table for all employees
-    st.subheader("Summary table")
-    summary_rows = []
-    for eid, meta in EMPLOYEES.items():
-        s = summarize_employee_events(eid)
-        summary_rows.append({"Employee ID": eid, "Name": meta["name"], "Email": meta["email"],
-                             "Total Visits": s["total_visits"], "Phish Visits": s["phish_visits"],
-                             "Safe Visits": s["safe_visits"], "Malware Events": s["malware_events"]})
-    st.table(summary_rows)
-
-    st.markdown("---")
-    st.subheader("View recent events for an employee")
-    eid_view = st.selectbox("Choose employee to view events", list(EMPLOYEES.keys()), index=0)
-    evs = STATE["events"].get(eid_view, [])
-    if not evs:
-        st.write("No recent events for this employee.")
-    else:
-        for ev in evs[:60]:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev["time"]))
-            if ev["type"] == "url_visit":
-                tag = "PHISH" if ev["phish"] else "SAFE"
-                st.write(f"- [{ts}] URL visit — {ev['url']} — {tag} — evidence: {', '.join(ev['evidence']) if ev['evidence'] else 'none'}")
-            else:
-                st.write(f"- [{ts}] {ev['type'].upper()} — {ev.get('desc','')}")
-
-st.markdown("---")
-st.subheader("Mailbox & URL scanning")
 placeholder = st.empty()
 results_placeholder = st.empty()
 
-if st.button("📩 Run Mock Mailbox Scan"):
-    st.info("Scanning mock mailbox...")
-    async def run_mail_scan():
-        rows = []
-        for idx, mail in enumerate(MOCK_MAILBOX, 1):
-            subject, urls, flagged = await parse_email(mail)
-            with placeholder.container():
-                st.write(f"**Email {idx}:** {subject}")
-                st.write(f"**URLs Found:** {urls if urls else 'None found'}")
-                if flagged:
-                    st.error(f"⚠ Suspicious links detected: {flagged}")
-                    play_alert_sound()
-                else:
-                    st.success("✅ No suspicious links found!")
-            rows.append({"Email": idx, "Subject": subject, "URLs": ", ".join(urls) if urls else "", "Flagged": ", ".join(flagged) if flagged else ""})
-            await asyncio.sleep(1.0)
-        results_placeholder.table(rows)
-    asyncio.run(run_mail_scan())
+# ----------------------------
+# Employee helpers
+# ----------------------------
+def get_employee_summary():
+    rows = []
+    for emp in EMPLOYEES:
+        total = len(emp["history"])
+        safe = sum(1 for h in emp["history"] if h["status"] == "SAFE")
+        phish = sum(1 for h in emp["history"] if h["status"] == "PHISH")
+        malware = sum(1 for h in emp["history"] if h["status"] == "MALWARE")
+        rows.append({
+            "Employee": emp["name"],
+            "Email": emp["email"],
+            "Total Visits": total,
+            "Safe": safe,
+            "Phishing": phish,
+            "Malware": malware,
+        })
+    return rows
 
-if st.button("🔎 Scan Test URL Lists now"):
-    st.info("Scanning test URL lists...")
-    scan_results = []
-    for url in PHISHING_URLS + SAFE_URLS:
-        ph = is_suspicious_keyword(url)
-        scan_results.append({"url": url, "status": "PHISH" if ph else "SAFE"})
-        if ph:
-            play_alert_sound()
-    st.table(scan_results)
+def add_visit(emp_id, url, status):
+    for emp in EMPLOYEES:
+        if emp["id"] == emp_id:
+            emp["history"].append({"url": url, "status": status})
+            return
 
-if run_sim:
-    st.info("Starting simulation (30 seconds)...")
-    asyncio.run(simulated_system_checks(run_seconds=30, interval=4))
-    st.success("Simulation finished. Summary updated.")
+# ----------------------------
+# Async tasks
+# ----------------------------
+async def monitor_mailbox():
+    for idx, mail in enumerate(MOCK_MAILBOX, 1):
+        subject, urls, flagged = await parse_email(mail)
+        with placeholder.container():
+            st.write(f"**Email {idx}:** {subject}")
+            st.write(f"**URLs Found:** {urls if urls else 'None found'}")
+            if flagged:
+                st.error(f"⚠ Suspicious links detected: {flagged}")
+                play_alert_sound()
+            else:
+                st.success("✅ No suspicious links found!")
+        await asyncio.sleep(2)
+
+async def scan_url_lists():
+    combined = []
+    for url in phishing_test_urls + safe_test_urls:
+        is_flagged = check_suspicious_keyword(url)
+        combined.append({"url": url, "status": "PHISH" if is_flagged else "SAFE"})
+        if is_flagged:
+            with results_placeholder.container():
+                st.error(f"⚠ PHISHING: {url}")
+                play_alert_sound()
+            await asyncio.sleep(0.2)
+    return combined
+
+async def simulate_employee_activity():
+    for _ in range(10):  # 10 rounds of random actions
+        emp = random.choice(EMPLOYEES)
+        # Pick either safe or phishing
+        if random.random() < 0.7:
+            url = random.choice(safe_test_urls)
+            status = "SAFE"
+        else:
+            url = random.choice(phishing_test_urls)
+            status = "PHISH"
+        add_visit(emp["id"], url, status)
+        if random.random() < 0.1:
+            add_visit(emp["id"], "MALWARE", "MALWARE")
+        await asyncio.sleep(3)
+
+# ----------------------------
+# Run buttons
+# ----------------------------
+if run_emails:
+    asyncio.run(monitor_mailbox())
+
+if scan_urls:
+    url_results = asyncio.run(scan_url_lists())
+    results_placeholder.table(url_results)
+
+if simulate_emp:
+    asyncio.run(simulate_employee_activity())
+
+# ----------------------------
+# Employee Summary Table
+# ----------------------------
+st.subheader("📊 Employee Activity Summary")
+st.table(get_employee_summary())
 
 st.markdown(
-    "----\n**Notes:** This is an educational demo using keyword heuristics. For production: add robust parsing, URL expansion, reputation checks, and human review."
+    "----\n**Notes:** This demo combines employee monitoring (mocked), mailbox scanning, "
+    "and URL checking. In production, you'd connect to real mail servers, proxies, and "
+    "security telemetry for accurate detections."
 )
