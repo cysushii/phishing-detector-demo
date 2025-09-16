@@ -1,6 +1,4 @@
 # phishing_app.py
-
-2
 # Run: streamlit run phishing_app.py
 
 import re, asyncio, random, time, io, math, wave, struct
