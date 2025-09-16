@@ -1,70 +1,32 @@
 # phishing_app.py
-import re
-import asyncio
-import io
-import math
-import wave
-import struct
-import random
-import time
-import streamlit as st
+
+2
+# Run: streamlit run phishing_app.py
+
+import re, asyncio, random, time, io, math, wave, struct
 from email import message_from_string
-from datetime import datetime, timedelta
+import streamlit as st
 
 # ----------------------------
-# MOCK ORG DATA (Cyber-DNA elements)
-# ----------------------------
-EMPLOYEES = {
-    "E001": {"name": "Asha Rao", "email": "asha.rao@company.com", "role": "Engineer"},
-    "E002": {"name": "Rahul Sen", "email": "rahul.sen@company.com", "role": "Analyst"},
-    "E003": {"name": "Neha Iyer", "email": "neha.iyer@company.com", "role": "HR"},
-    "E004": {"name": "Vikram Patel", "email": "vikram.patel@company.com", "role": "Manager"},
-}
-
-# Organization policy (trusted domains / VIPs) - Cyber-DNA
-ORG_POLICY = {
-    "trusted_domains": ["company.com", "intranet.company.com"],
-    "vip_emails": ["vikram.patel@company.com"],
-}
-
-# Store per-employee activity & detections in-memory (PoC)
-EMP_ACTIVITY = {eid: {"checked_urls": [], "flagged_urls": [], "anomalies": [], "risk_score": 0.0} for eid in EMPLOYEES}
-
-# ----------------------------
-# URL / phishing detection utilities
+# Utilities (URL extraction + simple rules)
 # ----------------------------
 def extract_urls(text: str):
     if not text:
         return []
-    return re.findall(r"(https?://[^\s,<>\"']+)", text)
+    return re.findall(r"(https?://[^\s]+)", text)
 
-def check_suspicious_keyword(url: str):
-    patterns = ["login", "verify", "bank", "update", "secure", "account", "reset", "re-activate"]
-    return any(p in url.lower() for p in patterns)
+def is_suspicious_keyword(url: str):
+    suspicious_patterns = ["login", "verify", "bank", "update", "secure", "account", "reset", "re-activate"]
+    return any(p in url.lower() for p in suspicious_patterns)
 
-def domain_from_url(url: str):
-    try:
-        return re.sub(r"^https?://", "", url.split("/")[0]).lower()
-    except Exception:
-        return url.lower()
-
-def is_trusted_domain(url: str):
-    dom = domain_from_url(url)
-    for t in ORG_POLICY["trusted_domains"]:
-        if dom.endswith(t):
-            return True
-    return False
-
-# ----------------------------
-# Sound (same as before) - best-effort
-# ----------------------------
+# Simple alert sound helper (Streamlit cloud fallback included)
 def play_alert_sound():
     try:
         import winsound
-        winsound.Beep(1000, 350)
+        winsound.Beep(1000, 300)
     except Exception:
-        # fallback: short generated WAV via st.audio (best for cloud)
-        sample_rate = 44100
+        # generate simple wav and stream via st.audio (works in browser)
+        sample_rate = 22050
         duration_s = 0.25
         frequency = 880.0
         n_samples = int(sample_rate * duration_s)
@@ -85,86 +47,219 @@ def play_alert_sound():
             pass
 
 # ----------------------------
-# System check simulation (malware / irregular behaviour)
+# Cyber-DNA PoC state (mock employees + org policy)
 # ----------------------------
-def simulate_system_check(eid: str):
-    """
-    PoC: Randomly simulate anomalies like 'process spike', 'strange file write', or 'suspicious connection'.
-    Higher severity anomalies increase employee risk_score.
-    """
-    choices = [
-        (0.02, "malware_signature_detected", 4),   # rare but severe
-        (0.05, "unexpected_process_spike", 3),
-        (0.07, "suspicious_outbound_connection", 3),
-        (0.12, "failed_login_bursts", 2),
-        (0.20, "suspicious_file_write", 2),
-    ]
-    r = random.random()
-    cumulative = 0.0
-    for prob, desc, severity in choices:
-        cumulative += prob
-        if r <= cumulative:
-            ts = datetime.now().isoformat(timespec='seconds')
-            anomaly = {"time": ts, "type": desc, "severity": severity}
-            EMP_ACTIVITY[eid]["anomalies"].append(anomaly)
-            # increase risk score (simple additive model)
-            EMP_ACTIVITY[eid]["risk_score"] += severity * 0.1
-            return anomaly
-    # No anomaly
-    return None
+EMPLOYEES = {
+    "E001": {"name": "Asha R", "email": "asha.r@company.local"},
+    "E002": {"name": "Ravi K", "email": "ravi.k@company.local"},
+    "E003": {"name": "Sneha M", "email": "sneha.m@company.local"},
+}
+
+# store runtime state: recent events per employee and baseline stats
+STATE = {
+    "events": {eid: [] for eid in EMPLOYEES.keys()},  # each event: dict
+    "visit_counts": {eid: [] for eid in EMPLOYEES.keys()},  # history of counts per interval
+    "risk_scores": {eid: 0.0 for eid in EMPLOYEES.keys()},
+}
+
+# org policy: trusted domains (whitelist)
+ORG_TRUSTED_DOMAINS = {"company.local", "intranet.company.local"}
+
+# some test URLs (phishing + safe)
+PHISHING_URLS = [
+    "http://secure-chasebank-login.top/verify",
+    "http://paypal.com.verify-account.cn/reset",
+    "http://example.com/login-update",
+    "https://amazon.account-update.io",
+]
+SAFE_URLS = [
+    "https://www.google.com",
+    "https://www.company.local/dashboard",
+    "https://www.github.com",
+]
 
 # ----------------------------
-# Behavioral baseline check (simple PoC)
+# Core functions
 # ----------------------------
-def check_behavioral_baseline(eid: str):
-    """
-    PoC baseline: if number of flagged URLs today > 2 or anomalies > 1 -> mark deviation.
-    """
-    today = datetime.now().date()
-    # For PoC we don't store per-day counts beyond current session. Use existing lists.
-    flagged_today = len(EMP_ACTIVITY[eid]["flagged_urls"])
-    anomalies = len(EMP_ACTIVITY[eid]["anomalies"])
-    deviated = flagged_today > 2 or anomalies > 1
-    if deviated:
-        EMP_ACTIVITY[eid]["risk_score"] += 0.2
-    return deviated
+def domain_of(url: str):
+    try:
+        return re.sub(r"^https?://", "", url).split("/")[0].lower()
+    except Exception:
+        return ""
 
-# ----------------------------
-# URL sync / check function
-# ----------------------------
-def sync_and_check_url(eid: str, url: str):
-    """
-    Called when an employee syncs/visits a URL. We record, check, and update risk.
-    """
-    ts = datetime.now().isoformat(timespec='seconds')
-    record = {"url": url, "time": ts}
-    EMP_ACTIVITY[eid]["checked_urls"].append(record)
+def is_trusted_domain(url: str):
+    d = domain_of(url)
+    return any(d.endswith(td) for td in ORG_TRUSTED_DOMAINS)
 
-    # trusted domain reduces suspicion
+def evaluate_url_for_employee(eid: str, url: str):
+    """Return (is_phish, evidence_list) and update event log"""
+    evidence = []
+    phish = False
     if is_trusted_domain(url):
-        return {"status": "SAFE", "reason": "trusted_domain"}
+        evidence.append("trusted domain (org policy)")
+    if is_suspicious_keyword(url):
+        evidence.append("suspicious keyword in URL")
+        phish = True
+    d = domain_of(url)
+    # simple lookalike heuristic: digits/letters replacing letters (e.g., amaz0n)
+    if re.search(r"[0-9]+", d) and any(x in d for x in ("amazon","paypal","bank","login")):
+        evidence.append("possible lookalike domain/homoglyph")
+        phish = True
+    # update event
+    event = {"time": time.time(), "type": "url_visit", "url": url, "phish": phish, "evidence": evidence}
+    STATE["events"][eid].insert(0, event)
+    # keep only recent 50 events
+    STATE["events"][eid] = STATE["events"][eid][:50]
+    # update visit_counts for baseline (count per interval)
+    if not STATE["visit_counts"][eid]:
+        STATE["visit_counts"][eid].append(1)
+    else:
+        STATE["visit_counts"][eid][-1] += 1
+    return phish, evidence
 
-    flagged = check_suspicious_keyword(url)
-    if flagged:
-        EMP_ACTIVITY[eid]["flagged_urls"].append({"url": url, "time": ts})
-        EMP_ACTIVITY[eid]["risk_score"] += 0.15
-        return {"status": "PHISH", "reason": "keyword_match"}
-    return {"status": "SAFE", "reason": "no_keyword"}
+def compute_risk_score(eid: str):
+    """Compute a simple risk score from recent events and baseline anomalies"""
+    events = STATE["events"].get(eid, [])
+    # base score = fraction of recent events flagged phish (weighted)
+    if not events:
+        base = 0.0
+    else:
+        last_n = events[:20]
+        phish_count = sum(1 for e in last_n if e.get("phish"))
+        base = phish_count / max(1, len(last_n))
+    # baseline anomaly: if last interval count is 3x median previous -> increase risk
+    counts = STATE["visit_counts"].get(eid, [])
+    anomaly = 0.0
+    if len(counts) >= 4:
+        median = sorted(counts[:-1])[len(counts[:-1])//2]
+        last = counts[-1]
+        if median > 0 and last >= 3 * median:
+            anomaly = 0.4
+    # malware simulation: count malware events
+    malware_count = sum(1 for e in events if e.get("type")=="malware" and (time.time()-e["time"])<3600)
+    mal_score = min(0.5, 0.2 * malware_count)
+    score = min(1.0, base * 0.6 + anomaly + mal_score)
+    STATE["risk_scores"][eid] = round(score, 3)
+    return STATE["risk_scores"][eid]
 
 # ----------------------------
-# Simple email parser for mock mailbox (keeps previous app behavior)
+# Simulated periodic system checker (async)
 # ----------------------------
-def extract_from_email(raw_email: str):
-    msg = message_from_string(raw_email)
-    subject = msg.get("subject", "(no subject)")
-    body = msg.get_payload() or ""
-    urls = extract_urls(str(body))
-    return subject, urls
+async def simulated_system_checks(run_seconds=30, interval=5):
+    """Simulate background checks: every `interval` seconds, for each employee:
+       - reset a visit counter for the upcoming interval
+       - randomly generate a few URL visits (using safe+phish lists)
+       - sometimes generate a 'malware' event
+    """
+    # we'll run for run_seconds seconds in demo; in production this would be infinite
+    start = time.time()
+    while time.time() - start < run_seconds:
+        # new interval: append a zero counter for each employee
+        for eid in EMPLOYEES.keys():
+            STATE["visit_counts"][eid].append(0)
+            # cap history length
+            if len(STATE["visit_counts"][eid])>12:
+                STATE["visit_counts"][eid].pop(0)
+        # simulate activity
+        for eid in EMPLOYEES.keys():
+            # each employee visits between 0..4 URLs this interval
+            visits = random.randint(0,4)
+            for _ in range(visits):
+                # 70% safe, 30% phishing
+                url = random.choice(SAFE_URLS) if random.random() < 0.7 else random.choice(PHISHING_URLS)
+                phish, evidence = evaluate_url_for_employee(eid, url)
+                if phish:
+                    play_alert_sound()
+                # small delay to let UI update nicely
+                await asyncio.sleep(0.1)
+            # sometimes (5% chance) a malware event appears
+            if random.random() < 0.05:
+                ev = {"time": time.time(), "type": "malware", "desc": "Possible malware behavior detected (simulated)"}
+                STATE["events"][eid].insert(0, ev)
+        # after interval compute risk scores
+        for eid in EMPLOYEES.keys():
+            compute_risk_score(eid)
+        await asyncio.sleep(interval)
 
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.set_page_config(page_title="Phish + Cyber-DNA Demo", layout="wide")
-st.title("🔒 Phishing Detector + Cyber-DNA Features (Demo)")
+st.set_page_config(page_title="Cyber-DNA Phishing + Employee Monitor", layout="wide")
+st.title("Cyber-DNA PoC — Employee Phishing Monitor")
 
-col
+# Left column: controls / employee selection
+col1, col2 = st.columns([1,2])
+
+with col1:
+    st.header("Controls")
+    run_sim = st.button("▶ Start simulated system checks (30s)")
+    stop_sim = st.button("⏹ Stop simulation (no-op in demo)")
+    st.write("Trusted org domains (comma-separated):")
+    td_input = st.text_input("Trusted domains", value=",".join(ORG_TRUSTED_DOMAINS))
+    if td_input.strip():
+        ORG_TRUSTED_DOMAINS.clear()
+        for d in [x.strip().lower() for x in td_input.split(",") if x.strip()]:
+            ORG_TRUSTED_DOMAINS.add(d)
+    st.markdown("---")
+    st.subheader("Sync URL for Employee")
+    sel_eid = st.selectbox("Employee", list(EMPLOYEES.keys()))
+    input_url = st.text_input("Paste URL to sync/check for selected employee")
+    if st.button("Check URL for Employee"):
+        if input_url.strip():
+            phish, evidence = evaluate_url_for_employee(sel_eid, input_url.strip())
+            compute_risk_score(sel_eid)
+            if phish:
+                st.error(f"⚠ URL flagged for {sel_eid}: {evidence}")
+                play_alert_sound()
+            else:
+                st.success(f"✅ URL looks safe for {sel_eid}. {evidence or ''}")
+
+with col2:
+    st.header("Employee Dashboard")
+    # show risk scores and recent events
+    rows = []
+    for eid, meta in EMPLOYEES.items():
+        score = compute_risk_score(eid)
+        rows.append((eid, meta["name"], meta["email"], score))
+    # table style
+    st.subheader("Risk Summary")
+    for eid, name, email, score in rows:
+        if score >= 0.6:
+            st.markdown(f"**{eid} — {name} ({email}) — RISK: {score}** 🔴")
+        elif score >= 0.3:
+            st.markdown(f"**{eid} — {name} ({email}) — RISK: {score}** 🟠")
+        else:
+            st.markdown(f"**{eid} — {name} ({email}) — RISK: {score}** 🟢")
+    st.markdown("---")
+    st.subheader("Recent Events (per employee)")
+    eid_view = st.selectbox("Choose employee to view events", list(EMPLOYEES.keys()), index=0)
+    evs = STATE["events"].get(eid_view, [])
+    if not evs:
+        st.write("No recent events.")
+    else:
+        for ev in evs[:10]:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ev["time"]))
+            if ev["type"] == "url_visit":
+                tag = "PHISH" if ev["phish"] else "SAFE"
+                st.write(f"- [{ts}] URL visit — {ev['url']} — {tag} — evidence: {', '.join(ev['evidence']) if ev['evidence'] else 'none'}")
+            else:
+                st.write(f"- [{ts}] {ev['type'].upper()} — {ev.get('desc','')}")
+
+    st.markdown("---")
+    st.subheader("Quick actions")
+    if st.button("Scan all test URLs now"):
+        # run a quick synchronous scan (demo)
+        scan_results = []
+        for url in PHISHING_URLS + SAFE_URLS:
+            ph = is_suspicious_keyword(url)
+            scan_results.append({"url": url, "status": "PHISH" if ph else "SAFE"})
+            if ph:
+                play_alert_sound()
+        st.table(scan_results)
+
+# Start simulated checks when button pressed
+if run_sim:
+    st.info("Starting simulated system checks for 30 seconds...")
+    # run the coroutine (demo-length)
+    asyncio.run(simulated_system_checks(run_seconds=30, interval=4))
+    st.success("Simulation complete. Check dashboard for updates.")
