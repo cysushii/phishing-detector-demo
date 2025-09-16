@@ -53,7 +53,37 @@ def play_alert_sound():
 # Mock employees (auto-generate many entries)
 # ----------------------------
 NUM_EMPLOYEES = 30
-EMPLOYEES = {}
+# ----------------------------
+# Mock employee directory with seeded activity
+# ----------------------------
+EMPLOYEES = [
+    {"id": 101, "name": "Alice",   "email": "alice@company.com",   "history": []},
+    {"id": 102, "name": "Bob",     "email": "bob@company.com",     "history": []},
+    {"id": 103, "name": "Charlie", "email": "charlie@company.com", "history": []},
+    {"id": 104, "name": "Diana",   "email": "diana@company.com",   "history": []},
+    {"id": 105, "name": "Eve",     "email": "eve@company.com",     "history": []},
+    {"id": 106, "name": "Frank",   "email": "frank@company.com",   "history": []},
+    {"id": 107, "name": "Grace",   "email": "grace@company.com",   "history": []},
+    {"id": 108, "name": "Henry",   "email": "henry@company.com",   "history": []},
+]
+
+def seed_employee_history():
+    """Pre-fill some visits so summary table looks alive."""
+    sample_visits = [
+        {"url": "https://www.google.com", "status": "SAFE"},
+        {"url": "http://secure-bank.verify.me", "status": "PHISH"},
+        {"url": "https://www.github.com", "status": "SAFE"},
+        {"url": "http://apple.id-login-reset.com", "status": "PHISH"},
+        {"url": "MALWARE", "status": "MALWARE"},
+    ]
+    import random
+    for emp in EMPLOYEES:
+        # Give each employee 3–6 random visits
+        emp["history"] = random.sample(sample_visits, k=random.randint(3, 6))
+
+# Call this once at startup
+seed_employee_history()
+
 for i in range(1, NUM_EMPLOYEES + 1):
     eid = f"E{i:03d}"
     name = f"Employee {i}"
