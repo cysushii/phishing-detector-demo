@@ -5,244 +5,166 @@ import io
 import math
 import wave
 import struct
+import random
+import time
 import streamlit as st
 from email import message_from_string
+from datetime import datetime, timedelta
 
 # ----------------------------
-# Utilities
+# MOCK ORG DATA (Cyber-DNA elements)
+# ----------------------------
+EMPLOYEES = {
+    "E001": {"name": "Asha Rao", "email": "asha.rao@company.com", "role": "Engineer"},
+    "E002": {"name": "Rahul Sen", "email": "rahul.sen@company.com", "role": "Analyst"},
+    "E003": {"name": "Neha Iyer", "email": "neha.iyer@company.com", "role": "HR"},
+    "E004": {"name": "Vikram Patel", "email": "vikram.patel@company.com", "role": "Manager"},
+}
+
+# Organization policy (trusted domains / VIPs) - Cyber-DNA
+ORG_POLICY = {
+    "trusted_domains": ["company.com", "intranet.company.com"],
+    "vip_emails": ["vikram.patel@company.com"],
+}
+
+# Store per-employee activity & detections in-memory (PoC)
+EMP_ACTIVITY = {eid: {"checked_urls": [], "flagged_urls": [], "anomalies": [], "risk_score": 0.0} for eid in EMPLOYEES}
+
+# ----------------------------
+# URL / phishing detection utilities
 # ----------------------------
 def extract_urls(text: str):
-    """Return list of URLs found in text (simple regex)."""
     if not text:
         return []
-    return re.findall(r"(https?://[^\s]+)", text)
+    return re.findall(r"(https?://[^\s,<>\"']+)", text)
 
 def check_suspicious_keyword(url: str):
-    """Simple keyword-based suspicion check."""
-    suspicious_patterns = ["login", "verify", "bank", "update", "secure", "account", "reset", "re-activate"]
-    return any(p in url.lower() for p in suspicious_patterns)
+    patterns = ["login", "verify", "bank", "update", "secure", "account", "reset", "re-activate"]
+    return any(p in url.lower() for p in patterns)
 
-# Sound alert helpers: Windows winsound or in-memory WAV for web
-def play_alert_sound():
-    """Play a short beep. Uses winsound on Windows, otherwise stream a generated WAV to Streamlit audio."""
+def domain_from_url(url: str):
     try:
-        # Try Windows-only winsound (will succeed on local Windows)
-        import winsound
-        winsound.Beep(1000, 400)  # frequency 1000Hz, duration 400ms
+        return re.sub(r"^https?://", "", url.split("/")[0]).lower()
     except Exception:
-        # Fallback: generate a short sine-wave WAV and store in buffer
+        return url.lower()
+
+def is_trusted_domain(url: str):
+    dom = domain_from_url(url)
+    for t in ORG_POLICY["trusted_domains"]:
+        if dom.endswith(t):
+            return True
+    return False
+
+# ----------------------------
+# Sound (same as before) - best-effort
+# ----------------------------
+def play_alert_sound():
+    try:
+        import winsound
+        winsound.Beep(1000, 350)
+    except Exception:
+        # fallback: short generated WAV via st.audio (best for cloud)
         sample_rate = 44100
-        duration_s = 0.35
+        duration_s = 0.25
         frequency = 880.0
         n_samples = int(sample_rate * duration_s)
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit
+            wf.setsampwidth(2)
             wf.setframerate(sample_rate)
             for i in range(n_samples):
                 t = i / sample_rate
-                amplitude = 0.3 * 32767
+                amplitude = 0.25 * 32767
                 value = int(amplitude * math.sin(2 * math.pi * frequency * t))
-                data = struct.pack('<h', value)
-                wf.writeframesraw(data)
+                wf.writeframes(struct.pack('<h', value))
         buf.seek(0)
-        # Streamlit can play bytes via st.audio
         try:
             st.audio(buf.read(), format="audio/wav")
         except Exception:
-            # If audio cannot be played (e.g., running headless), ignore silently
             pass
 
 # ----------------------------
-# Test URL lists (phishing + safe)
+# System check simulation (malware / irregular behaviour)
 # ----------------------------
-phishing_test_urls = [
-    "http://example.com/login-update",
-    "http://secure-bank.verify.me",
-    "https://paypal.com.verify-account.cn",
-    "http://apple.id-login-reset.com",
-    "http://secure-update-account.net",
-    "https://microsoft-support-login.ru",
-    "http://bankofamerica.secure-access.info",
-    "https://dropbox-login-files.net",
-    "http://facebook-security-check.xyz",
-    "http://instagram.verify-login.pw",
-    "https://amazon.account-update.io",
-    "http://google.drive-secure-login.ga",
-    "https://netflix.re-activate-account.shop",
-    "http://secure-chasebank-login.top",
-    "http://paypal.com.security-check.tk",
-    "https://icloud-verify-account.cf",
-    "http://yahoo.recovery-login.ml",
-]
-
-safe_test_urls = [
-    "https://www.google.com",
-    "https://www.wikipedia.org",
-    "https://www.github.com",
-    "https://www.stackoverflow.com",
-    "https://www.microsoft.com",
-    "https://www.apple.com",
-    "https://www.amazon.in",
-    "https://www.netflix.com",
-    "https://www.nytimes.com",
-    "https://www.bbc.com",
-    "https://www.linkedin.com",
-    "https://www.reddit.com",
-    "https://www.instagram.com",
-    "https://www.whatsapp.com",
-    "https://www.dropbox.com",
-]
+def simulate_system_check(eid: str):
+    """
+    PoC: Randomly simulate anomalies like 'process spike', 'strange file write', or 'suspicious connection'.
+    Higher severity anomalies increase employee risk_score.
+    """
+    choices = [
+        (0.02, "malware_signature_detected", 4),   # rare but severe
+        (0.05, "unexpected_process_spike", 3),
+        (0.07, "suspicious_outbound_connection", 3),
+        (0.12, "failed_login_bursts", 2),
+        (0.20, "suspicious_file_write", 2),
+    ]
+    r = random.random()
+    cumulative = 0.0
+    for prob, desc, severity in choices:
+        cumulative += prob
+        if r <= cumulative:
+            ts = datetime.now().isoformat(timespec='seconds')
+            anomaly = {"time": ts, "type": desc, "severity": severity}
+            EMP_ACTIVITY[eid]["anomalies"].append(anomaly)
+            # increase risk score (simple additive model)
+            EMP_ACTIVITY[eid]["risk_score"] += severity * 0.1
+            return anomaly
+    # No anomaly
+    return None
 
 # ----------------------------
-# Mock mailbox (emails embedding safe + phishing URLs)
+# Behavioral baseline check (simple PoC)
 # ----------------------------
-MOCK_MAILBOX = [
-    # safe email
-    """Subject: Meeting tomorrow
-From: teamlead@company.com
-To: you@example.com
-
-Hi, just a reminder about tomorrow's meeting. 
-Here’s the agenda: http://company.com/agenda
-""",
-    # phishing email (Amazon lookalike)
-    """Subject: Urgent - Verify your account now!
-From: fakebank@secure-login.com
-To: you@example.com
-
-Dear user,
-Please verify your account immediately by clicking the link:
-http://secure-chasebank-login.top/verify
-""",
-    # mixed email with multiple links
-    f"""Subject: Please check these links
-From: alerts@random.com
-To: you@example.com
-
-Hi,
-Please review:
-- {safe_test_urls[0]}
-- {phishing_test_urls[0]}
-- {safe_test_urls[2]}
-Thanks.
-""",
-    # phishing mass-mail style
-    """Subject: Your account has been locked
-From: support@payment-update.example
-To: you@example.com
-
-We detected suspicious sign-in. Reset immediately:
-https://paypal.com.verify-account.cn/reset
-""",
-]
+def check_behavioral_baseline(eid: str):
+    """
+    PoC baseline: if number of flagged URLs today > 2 or anomalies > 1 -> mark deviation.
+    """
+    today = datetime.now().date()
+    # For PoC we don't store per-day counts beyond current session. Use existing lists.
+    flagged_today = len(EMP_ACTIVITY[eid]["flagged_urls"])
+    anomalies = len(EMP_ACTIVITY[eid]["anomalies"])
+    deviated = flagged_today > 2 or anomalies > 1
+    if deviated:
+        EMP_ACTIVITY[eid]["risk_score"] += 0.2
+    return deviated
 
 # ----------------------------
-# Async parser for emails
+# URL sync / check function
 # ----------------------------
-async def parse_email(raw_email: str):
+def sync_and_check_url(eid: str, url: str):
+    """
+    Called when an employee syncs/visits a URL. We record, check, and update risk.
+    """
+    ts = datetime.now().isoformat(timespec='seconds')
+    record = {"url": url, "time": ts}
+    EMP_ACTIVITY[eid]["checked_urls"].append(record)
+
+    # trusted domain reduces suspicion
+    if is_trusted_domain(url):
+        return {"status": "SAFE", "reason": "trusted_domain"}
+
+    flagged = check_suspicious_keyword(url)
+    if flagged:
+        EMP_ACTIVITY[eid]["flagged_urls"].append({"url": url, "time": ts})
+        EMP_ACTIVITY[eid]["risk_score"] += 0.15
+        return {"status": "PHISH", "reason": "keyword_match"}
+    return {"status": "SAFE", "reason": "no_keyword"}
+
+# ----------------------------
+# Simple email parser for mock mailbox (keeps previous app behavior)
+# ----------------------------
+def extract_from_email(raw_email: str):
     msg = message_from_string(raw_email)
     subject = msg.get("subject", "(no subject)")
-    # Basic payload handling for demo
-    body = msg.get_payload()
-    if body is None:
-        body = ""
+    body = msg.get_payload() or ""
     urls = extract_urls(str(body))
-    flagged = [url for url in urls if check_suspicious_keyword(url)]
-    return subject, urls, flagged
+    return subject, urls
 
 # ----------------------------
 # Streamlit UI
 # ----------------------------
-st.set_page_config(page_title="Phishing Detector Demo", layout="centered")
-st.title("🔒 AI Phishing Detector — Demo (Live + Test URLs) MADE BY SUSHANTH . M AND VISHVATH .M :)")
+st.set_page_config(page_title="Phish + Cyber-DNA Demo", layout="wide")
+st.title("🔒 Phishing Detector + Cyber-DNA Features (Demo)")
 
-st.markdown(
-    "This demo scans mock emails and test URLs. Suspicious links trigger an alert and a sound."
-)
-
-# User controls
-run_emails = st.button("📩 Start Monitoring Mock Mailbox")
-scan_urls = st.button("🔎 Scan Test URL Lists")
-show_examples = st.checkbox("Show test URL lists", value=True)
-
-if show_examples:
-    st.info("Phishing test URLs (samples)")
-    st.code("\n".join(phishing_test_urls[:10]) + "\n...")  # show a subset to avoid long page
-    st.info("Safe test URLs (samples)")
-    st.code("\n".join(safe_test_urls[:10]) + "\n...")
-
-# Placeholder areas for dynamic content
-placeholder = st.empty()
-results_placeholder = st.empty()
-
-# Coroutine: monitor mailbox emails
-async def monitor_mailbox():
-    results = []
-    for idx, mail in enumerate(MOCK_MAILBOX, 1):
-        subject, urls, flagged = await parse_email(mail)
-        # UI update
-        with placeholder.container():
-            st.write(f"**Email {idx}:** {subject}")
-            st.write(f"**URLs Found:** {urls if urls else 'None found'}")
-            if flagged:
-                st.error(f"⚠ Suspicious links detected: {flagged}")
-                play_alert_sound()
-            else:
-                st.success("✅ No suspicious links found!")
-        results.append({"source": f"email_{idx}", "subject": subject, "urls": urls, "flagged": flagged})
-        await asyncio.sleep(2)
-    return results
-
-# Coroutine: scan lists of URLs (safe + phishing)
-async def scan_url_lists():
-    combined = []
-    # scan phishing list
-    for url in phishing_test_urls:
-        is_flagged = check_suspicious_keyword(url)
-        combined.append({"url": url, "status": "PHISH" if is_flagged else "SAFE"})
-        if is_flagged:
-            # show alert and play sound
-            with results_placeholder.container():
-                st.error(f"⚠ PHISHING: {url}")
-                play_alert_sound()
-            await asyncio.sleep(0.3)
-    # scan safe list
-    for url in safe_test_urls:
-        is_flagged = check_suspicious_keyword(url)
-        combined.append({"url": url, "status": "PHISH" if is_flagged else "SAFE"})
-        if is_flagged:
-            with results_placeholder.container():
-                st.error(f"⚠ PHISHING: {url}")
-                play_alert_sound()
-            await asyncio.sleep(0.1)
-    return combined
-
-# Run the requested actions
-if run_emails:
-    st.info("Monitoring mock mailbox...")
-    email_results = asyncio.run(monitor_mailbox())
-    # show a summary table
-    rows = []
-    for r in email_results:
-        rows.append(
-            {
-                "Source": r["source"],
-                "Subject": r["subject"],
-                "URLs Found": ", ".join(r["urls"]) if r["urls"] else "",
-                "Flagged": ", ".join(r["flagged"]) if r["flagged"] else "",
-            }
-        )
-    results_placeholder.table(rows)
-
-if scan_urls:
-    st.info("Scanning test URL lists...")
-    url_results = asyncio.run(scan_url_lists())
-    results_placeholder.table(url_results)
-
-st.markdown(
-    "----\n**Notes:** This demo uses simple keyword rules to flag URLs (for learning/demo purposes). "
-    "In production you would add robust parsing, domain reputation checks, SPF/DKIM checks and human-in-the-loop review."
-)
-
+col
